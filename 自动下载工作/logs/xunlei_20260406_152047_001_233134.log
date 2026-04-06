@@ -1,0 +1,39 @@
+============================================================
+迅雷网盘转存日志
+文件夹: 20260406_152047_001
+开始时间: 2026-04-06 23:31:34
+总计链接: 311
+============================================================
+
+[23:31:34] [INFO] 日志文件: D:\AI\AI_Tool\自动下载工作\logs\xunlei_20260406_152047_001_233134.log
+[23:31:34] [INFO] 迅雷已在运行
+[23:31:39] [INFO] 初始化：准备打开 7 个链接，剩余待处理: 311
+[23:31:39] [INFO]   打开链接 1/7: Updated:  https://pan.xunlei.com/s/VOojC
+[23:31:41] [INFO]   打开链接 2/7: Updated:  https://pan.xunlei.com/s/VOpIr
+[23:31:42] [INFO]   打开链接 3/7: Updated:  https://pan.xunlei.com/s/VOn56
+[23:31:44] [INFO]   打开链接 4/7: Updated:  https://pan.xunlei.com/s/VOojC
+[23:31:46] [INFO]   打开链接 5/7: Updated:  https://pan.xunlei.com/s/VOojC
+[23:31:47] [INFO]   打开链接 6/7: Updated:  https://pan.xunlei.com/s/VOpIr
+[23:31:49] [INFO]   打开链接 7/7: Updated:  https://pan.xunlei.com/s/VOojC
+[23:31:51] [INFO] 初始化完成，实际打开: 7 个窗口
+[23:31:51] [INFO] 等待5秒加载...
+[23:31:56] [INFO] === 第 1 轮处理 ===
+[23:31:56] [INFO] 窗口1: 点击转存 Updated:  https://pan.xunlei.com/s/VOojC
+[23:31:57] [INFO] === 第 2 轮处理 ===
+[23:31:59] [INFO]   检测状态: unknown, 类型: None, 消息: 迅雷  Chrome Legacy Window
+[23:32:00] [INFO] === 第 3 轮处理 ===
+[23:32:01] [INFO]   检测状态: unknown, 类型: None, 消息: 迅雷  Chrome Legacy Window
+[23:32:02] [INFO] === 第 4 轮处理 ===
+[23:32:03] [INFO]   检测状态: unknown, 类型: None, 消息: 迅雷  Chrome Legacy Window
+[23:32:04] [INFO] === 第 5 轮处理 ===
+[23:32:04] [WARN] 窗口1: 处理超时，标记为卡住
+[23:32:05] [WARN] 窗口1: 刷新重试 (1/2)
+[23:32:09] [INFO] === 第 6 轮处理 ===
+[23:32:10] [INFO]   检测状态: unknown, 类型: None, 消息: 迅雷  Chrome Legacy Window
+[23:32:11] [INFO] === 第 7 轮处理 ===
+[23:32:12] [INFO]   检测状态: unknown, 类型: None, 消息: 迅雷  Chrome Legacy Window
+[23:32:13] [INFO] === 第 8 轮处理 ===
+[23:32:14] [INFO]   检测状态: unknown, 类型: None, 消息: 迅雷  Chrome Legacy Window
+[23:32:15] [INFO] === 第 9 轮处理 ===
+[23:32:16] [WARN] 窗口1: 处理超时，标记为卡住
+[23:32:17] [WARN] 窗口1: 刷新重试 (2/2)

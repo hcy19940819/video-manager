@@ -1,0 +1,622 @@
+# -*- coding: utf-8 -*-
+"""
+迅雷网盘自动转存工具
+支持：断点续传、7窗口动态并行、刷新重试、自动补满、异常记录
+"""
+
+import os
+import sys
+import time
+import json
+import signal
+from pathlib import Path
+from datetime import datetime
+from dataclasses import dataclass
+from typing import List, Optional
+
+import pyperclip
+import pyautogui
+import psutil
+
+from progress import (
+    load_progress, save_progress, clear_progress,
+    get_pending_links, print_progress_bar
+)
+from window_inspector import detect_xunlei_status
+
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0.3
+
+BASE_DIR = Path(__file__).parent
+COORDS_FILE = BASE_DIR / 'xl_coords.json'
+XUNLEI_LNK = r'C:/Users/HCY/Desktop/迅雷.lnk'
+RUNTIME_LOG = []
+STOP_FLAG = False
+CURRENT_LOG_FILE = None  # 当前日志文件路径
+
+# 配置
+MAX_WINDOWS = 7  # 最大并行窗口数
+TAB_COORDS = {'x': 765, 'y': 333}  # 第1个标签页坐标
+TAB_WIDTH = 100  # 每个标签页宽度
+DETECT_TIMEOUT = 6  # 单个窗口检测超时(秒)
+REFRESH_COORDS = {'x': 750, 'y': 366}  # 刷新按钮坐标
+
+# 异常记录配置
+EXCEPTION_DIR = BASE_DIR / '异常文件夹'
+
+
+@dataclass
+class WindowState:
+    """窗口状态"""
+    index: int  # 窗口索引(0-6)
+    url: str
+    status: str  # 'pending'(待处理)/'processing'(处理中)/'success'(成功)/'failed'(失败)/'stuck'(卡住)
+    start_time: float
+    retry_count: int = 0
+
+
+def signal_handler(sig, frame):
+    global STOP_FLAG
+    STOP_FLAG = True
+    print('\n\n[用户中断] 正在保存进度并退出...')
+
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+def log(msg, log_type='INFO'):
+    """
+    记录日志
+    log_type: INFO/SUCCESS/ERROR/WARN/EXCEPTION
+    """
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    line = '[{0}] [{1}] {2}'.format(timestamp, log_type, msg)
+    RUNTIME_LOG.append(line)
+    print(line)
+    
+    # 实时写入日志文件
+    global CURRENT_LOG_FILE
+    if CURRENT_LOG_FILE:
+        with open(CURRENT_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+
+
+def load_coords():
+    if COORDS_FILE.exists():
+        with open(COORDS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return None
+
+
+def is_xunlei_running():
+    for proc in psutil.process_iter(['name']):
+        try:
+            name = proc.info['name'] or ''
+            if 'xunlei' in name.lower() or 'thunder' in name.lower():
+                return True
+        except:
+            pass
+    return False
+
+
+def start_xunlei():
+    if is_xunlei_running():
+        log('迅雷已在运行')
+        return True
+    
+    if os.path.exists(XUNLEI_LNK):
+        log('启动迅雷...')
+        os.startfile(XUNLEI_LNK)
+        time.sleep(10)
+        return True
+    else:
+        log('[错误] 未找到迅雷快捷方式')
+        return False
+
+
+def close_tab():
+    pyautogui.keyDown('ctrl')
+    pyautogui.keyDown('w')
+    pyautogui.keyUp('w')
+    pyautogui.keyUp('ctrl')
+    time.sleep(0.3)
+
+
+def click_tab(index):
+    """点击第index个标签页"""
+    x = TAB_COORDS['x'] + index * TAB_WIDTH
+    y = TAB_COORDS['y']
+    pyautogui.click(x, y)
+    time.sleep(0.3)
+
+
+def refresh_page():
+    """刷新当前页面"""
+    pyautogui.click(REFRESH_COORDS['x'], REFRESH_COORDS['y'])
+    time.sleep(0.5)
+
+
+def open_link(url):
+    """打开一个新链接"""
+    pyperclip.copy(url)
+    time.sleep(0.3)
+    pyautogui.hotkey('ctrl', 'v')
+    time.sleep(0.5)
+    pyautogui.press('enter')  # 按回车打开链接
+    time.sleep(2)  # 等待2秒让页面加载
+
+
+def click_save(coords):
+    """点击转存按钮"""
+    btn = coords.get('save_btn')
+    if btn:
+        pyautogui.click(btn['x'], btn['y'])
+        return True
+    return False
+
+
+def record_exception(url: str, exception_type: str, folder_name: str, source_file: str = 'xunlei_pan_links.txt'):
+    """
+    记录异常链接
+    exception_type: wrong_code/captcha/need_login/limit/file_deleted
+    """
+    # 链接失效不需要记录
+    if exception_type == 'link_invalid':
+        log('链接失效，跳过记录: {0}'.format(url[:50]), 'WARN')
+        return
+    
+    # 创建异常文件夹
+    exception_folder = EXCEPTION_DIR / folder_name
+    exception_folder.mkdir(parents=True, exist_ok=True)
+    
+    # 异常类型映射到文件名
+    exception_files = {
+        'wrong_code': 'xunlei_wrong_code.txt',
+        'captcha': 'xunlei_captcha.txt',
+        'need_login': 'xunlei_need_login.txt',
+        'limit': 'xunlei_limit.txt',
+        'file_deleted': 'xunlei_file_deleted.txt',
+    }
+    
+    filename = exception_files.get(exception_type, 'xunlei_other.txt')
+    exception_file = exception_folder / filename
+    
+    # 追加记录
+    with open(exception_file, 'a', encoding='utf-8') as f:
+        f.write('{0}  # 来源: {1}\n'.format(url, source_file))
+    
+    log('已记录异常 [{0}]: {1}'.format(exception_type, url[:50]), 'EXCEPTION')
+
+
+def process_windows(windows: List[WindowState], coords, pending_urls: List[str], folder_name: str, retry_windows: list) -> tuple:
+    """
+    处理所有窗口，返回 (更新后的窗口列表, 剩余待处理URL, 已关闭窗口, 需复开窗口, 是否致命错误)
+    
+    状态处理：
+    1. 失效/无效链接 → 关闭，不计异常，继续
+    2. 提取码错误 → 关闭，记异常，继续
+    3. 文件删除 → 关闭，记异常，继续
+    4. 需要登录/操作频繁 → 致命错误，立即停止
+    5. 加载未完成 → 刷新10s，最多3次，失败则记异常，需复开
+    """
+    DETECT_TIMEOUT = 10  # 加载超时10秒
+    MAX_RETRY = 3  # 最多刷新3次
+    
+    windows_to_close = []
+    
+    while windows and not STOP_FLAG:
+        click_tab(0)
+        time.sleep(0.3)
+        
+        window = windows[0]
+        
+        if window.status == 'pending':
+            log('处理: {0}'.format(window.url[:50]), 'INFO')
+            # pending状态的窗口已经加载了链接，直接点击转存
+            if click_save(coords):
+                window.status = 'processing'
+                window.start_time = time.time()
+                window.retry_count = 0
+                log('  → 点击转存，等待结果', 'INFO')
+            else:
+                window.status = 'failed'
+                window.error_type = 'no_save_button'
+                log('  → 未找到转存按钮', 'ERROR')
+                record_exception(window.url, 'no_save_button', folder_name)
+                windows_to_close.append(window)
+        
+        elif window.status == 'processing':
+            elapsed = time.time() - window.start_time
+            status = detect_xunlei_status()
+            
+            if status['status'] == 'success':
+                window.status = 'success'
+                log('  → 转存成功', 'SUCCESS')
+                windows_to_close.append(window)
+            
+            elif status['status'] == 'error':
+                error_type = status['type']
+                
+                # 致命错误：需要登录/操作频繁 → 立即停止
+                if error_type in ['need_login', 'limit']:
+                    log('  → 致命错误 [{0}]：{1}'.format(error_type, status['message']), 'ERROR')
+                    log('  → 工具即将停止，请处理后再从断点继续', 'ERROR')
+                    record_exception(window.url, error_type, folder_name)
+                    return windows, pending_urls, windows_to_close, retry_windows, True  # 致命错误
+                
+                # 失效/无效链接 → 关闭，不计异常，继续
+                elif error_type == 'link_invalid':
+                    window.status = 'failed'
+                    window.error_type = error_type
+                    log('  → 链接失效，跳过', 'WARN')
+                    windows_to_close.append(window)
+                
+                # 提取码错误 → 关闭，记异常，继续
+                elif error_type == 'wrong_code':
+                    window.status = 'failed'
+                    window.error_type = error_type
+                    log('  → 提取码错误', 'ERROR')
+                    record_exception(window.url, error_type, folder_name)
+                    windows_to_close.append(window)
+                
+                # 其他错误（文件删除等）→ 关闭，记异常，继续
+                else:
+                    window.status = 'failed'
+                    window.error_type = error_type
+                    log('  → 错误 [{0}]'.format(error_type), 'ERROR')
+                    record_exception(window.url, error_type, folder_name)
+                    windows_to_close.append(window)
+            
+            else:
+                # 加载未完成 → 检查超时
+                if elapsed > DETECT_TIMEOUT:
+                    window.retry_count = getattr(window, 'retry_count', 0) + 1
+                    
+                    if window.retry_count <= MAX_RETRY:
+                        log('  → 加载超时，刷新重试 ({0}/{1})'.format(window.retry_count, MAX_RETRY), 'WARN')
+                        refresh_page()
+                        time.sleep(2)
+                        click_save(coords)
+                        window.start_time = time.time()
+                    else:
+                        # 3次刷新失败，记异常，需复开
+                        window.status = 'stuck'
+                        window.error_type = 'load_timeout'
+                        log('  → 刷新3次仍失败，稍后复开', 'ERROR')
+                        record_exception(window.url, 'load_timeout', folder_name)
+                        retry_windows.append(window)
+                        windows.pop(0)
+                        close_tab()
+                        time.sleep(0.3)
+                        continue
+                else:
+                    log('  → 加载中...', 'INFO')
+        
+        # 关闭已完成/失败的窗口
+        if window.status in ['success', 'failed']:
+            close_tab()
+            time.sleep(0.3)
+            windows.pop(0)
+        
+        # 如果当前窗口还在processing（加载中），本轮先跳过，等待下次
+        elif window.status == 'processing':
+            # 检查是否所有窗口都在processing，如果是则退出本轮
+            all_processing = all(w.status == 'processing' for w in windows)
+            if all_processing:
+                log('所有窗口加载中，本轮结束等待...')
+                break
+        
+        if not windows:
+            break
+    
+    return windows, pending_urls, windows_to_close, retry_windows, False  # 正常
+
+
+def find_latest_folder(base_dir):
+    if not base_dir.exists():
+        return None
+    folders = [f for f in base_dir.iterdir() if f.is_dir()]
+    if not folders:
+        return None
+    return max(folders, key=lambda x: x.name)
+
+
+def load_pan_links(pan_type, folder):
+    """加载网盘链接"""
+    links = []
+    for txt_file in folder.glob('*.txt'):
+        with open(txt_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        for line in content.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            if pan_type == 'xunlei' and 'pan.xunlei.com' in line:
+                links.append({'url': line, 'code': ''})
+    return links
+
+
+def main():
+    global STOP_FLAG
+    
+    print('=' * 60)
+    print('迅雷网盘自动转存')
+    print('=' * 60)
+    print()
+    print('提示：关闭此窗口即可停止程序')
+    print('并行模式：动态 {0} 窗口，支持刷新重试'.format(MAX_WINDOWS))
+    print('异常记录：保存到 异常文件夹/<日期>/')
+    print()
+    
+    coords = load_coords()
+    if not coords:
+        print('[错误] 未找到坐标，请先校准坐标')
+        input('按 Enter 退出...')
+        return
+    
+    # 加载链接
+    stboy_dir = Path(r'D:/AI/AI_Tool/STboy_Auto/extracted_links')
+    latest = find_latest_folder(stboy_dir)
+    
+    if not latest:
+        print('[错误] 未找到链接文件夹')
+        input('按 Enter 退出...')
+        return
+    
+    folder_name = latest.name  # 保存文件夹名用于异常记录
+    
+    links_data = load_pan_links('xunlei', latest)
+    all_links = [d['url'] for d in links_data]
+    
+    if not all_links:
+        print('[错误] 没有待处理的链接')
+        input('按 Enter 退出...')
+        return
+    
+    # 检查断点续传
+    pending_urls, is_resume, progress = get_pending_links('xunlei', all_links, folder_name)
+    
+    if is_resume:
+        completed_count = len(progress.get('completed', []))
+        failed_count = len(progress.get('failed', []))
+        print()
+        print('发现未完成的任务！')
+        print('  文件夹: {0}'.format(folder_name))
+        print('  总计: {0}'.format(len(all_links)))
+        print('  已完成: {0}'.format(completed_count))
+        print('  失败: {0}'.format(failed_count))
+        print('  待处理: {0}'.format(len(pending_urls)))
+        print()
+        print('请选择：')
+        print('  Y - 继续上次任务')
+        print('  N - 取消，读取最新文件夹重新下载')
+        print('  C - 取消，返回主菜单')
+        choice = input('请输入 (Y/N/C): ').strip().upper()
+        
+        if choice == 'C':
+            print('已取消')
+            return
+        elif choice == 'N':
+            clear_progress('xunlei')
+            latest = find_latest_folder(stboy_dir)
+            if not latest:
+                print('[错误] 未找到链接文件夹')
+                input('按 Enter 退出...')
+                return
+            folder_name = latest.name
+            links_data = load_pan_links('xunlei', latest)
+            all_links = [d['url'] for d in links_data]
+            pending_urls = all_links.copy()
+            completed = []
+            failed = []
+            print()
+            print('已切换到最新文件夹: {0}'.format(folder_name))
+        else:
+            completed = progress.get('completed', [])
+            failed = progress.get('failed', [])
+    else:
+        completed = []
+        failed = []
+    
+    total = len(all_links)
+    remaining = len(pending_urls)
+    
+    print()
+    print('准备转存 {0} 个链接（动态{1}窗口）'.format(remaining, MAX_WINDOWS))
+    print()
+    
+    # 初始化日志文件
+    global CURRENT_LOG_FILE
+    log_dir = BASE_DIR / 'logs'
+    log_dir.mkdir(exist_ok=True)
+    CURRENT_LOG_FILE = log_dir / 'xunlei_{0}_{1}.log'.format(folder_name, datetime.now().strftime('%H%M%S'))
+    
+    # 写入日志头
+    with open(CURRENT_LOG_FILE, 'w', encoding='utf-8') as f:
+        f.write('=' * 60 + '\n')
+        f.write('迅雷网盘转存日志\n')
+        f.write('文件夹: {0}\n'.format(folder_name))
+        f.write('开始时间: {0}\n'.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        f.write('总计链接: {0}\n'.format(total))
+        f.write('=' * 60 + '\n\n')
+    
+    log('日志文件: {0}'.format(CURRENT_LOG_FILE), 'INFO')
+    print()
+    
+    if not start_xunlei():
+        print('[错误] 无法启动迅雷')
+        input('按 Enter 退出...')
+        return
+    
+    print()
+    print('5秒后开始，请切换到迅雷窗口...')
+    for i in range(5, 0, -1):
+        print('\r倒计时: {0} 秒'.format(i), end='', flush=True)
+        time.sleep(1)
+    print('\r开始转存！                ')
+    print()
+    print('=' * 60)
+    
+    # 初始化：先打开最多7个链接
+    windows = []
+    log('初始化：打开前 {0} 个链接...'.format(min(MAX_WINDOWS, len(pending_urls))))
+    for i in range(min(MAX_WINDOWS, len(pending_urls))):
+        url = pending_urls.pop(0)
+        open_link(url)
+        windows.append(WindowState(index=i, url=url, status='pending', start_time=0))
+    
+    # 等待5秒让页面加载
+    log('等待5秒加载...')
+    time.sleep(5)
+    
+    # 主循环
+    processed = 0
+    round_num = 0
+    retry_windows = []  # 记录需复开的窗口（加载未完成）
+    fatal_error = False  # 是否遇到致命错误
+    normal_phase_done = False  # 正常流程是否完成
+    
+    while (windows or pending_urls or retry_windows) and not STOP_FLAG and not fatal_error:
+        round_num += 1
+        print()
+        log('=== 第 {0} 轮 ==='.format(round_num))
+        
+        # 阶段1：正常流程（新链接）
+        if not normal_phase_done:
+            # 先处理需复开的窗口（穿插在正常流程中）
+            if retry_windows and len(windows) < MAX_WINDOWS:
+                need = min(MAX_WINDOWS - len(windows), len(retry_windows))
+                log('复开 {0} 个加载失败的窗口...'.format(need))
+                for i in range(need):
+                    w = retry_windows.pop(0)
+                    open_link(w.url)
+                    w.status = 'pending'
+                    w.start_time = 0
+                    w.retry_count = 0
+                    windows.append(w)
+                time.sleep(3)
+        
+        # 阶段2：正常流程完成后，统一处理剩余的retry_windows
+        if normal_phase_done and retry_windows and not windows:
+            log('正常流程完成，处理 {0} 个异常链接...'.format(len(retry_windows)))
+            for w in retry_windows:
+                open_link(w.url)
+                w.status = 'pending'
+                w.start_time = 0
+                w.retry_count = 0
+            windows = retry_windows
+            retry_windows = []
+            time.sleep(3)
+            continue
+        
+        # 处理当前所有窗口
+        windows, pending_urls, closed_windows, retry_windows, fatal_error = process_windows(
+            windows, coords, pending_urls, folder_name, retry_windows
+        )
+        
+        # 更新已完成的进度
+        for w in closed_windows:
+            if w.status == 'success':
+                completed.append(w.url)
+                processed += 1
+            elif w.status == 'failed':
+                failed.append(w.url)
+                processed += 1
+        
+        # 如果遇到致命错误，保存进度并退出
+        if fatal_error:
+            log('遇到致命错误，保存进度并退出...', 'ERROR')
+            save_progress('xunlei', folder_name, completed, failed, total)
+            break
+        
+        # 检查正常流程是否完成
+        if not normal_phase_done and not pending_urls:
+            normal_phase_done = True
+            if retry_windows:
+                log('正常链接处理完毕，待处理异常链接: {0} 个'.format(len(retry_windows)))
+        
+        # 补充新链接，保持最多7个窗口
+        current_count = len(windows)
+        need_count = min(MAX_WINDOWS - current_count, len(pending_urls))
+        
+        if need_count > 0:
+            log('补充 {0} 个新链接...'.format(need_count))
+            for i in range(need_count):
+                url = pending_urls.pop(0)
+                open_link(url)
+                windows.append(WindowState(index=current_count + i, url=url, status='pending', start_time=0))
+            time.sleep(3)
+        
+        save_progress('xunlei', folder_name, completed, failed, total)
+        print_progress_bar(len(completed) + len(failed), total, prefix='总进度')
+        
+        if retry_windows:
+            log('待复开: {0} 个'.format(len(retry_windows)), 'WARN')
+        
+        if windows and any(w.status == 'processing' for w in windows):
+            log('等待处理中...')
+            time.sleep(2)
+    
+    # 清理剩余窗口（包括需复开的）
+    all_remaining = windows + retry_windows
+    if all_remaining:
+        log('清理剩余 {0} 个窗口...'.format(len(all_remaining)))
+        while all_remaining:
+            click_tab(0)
+            w = all_remaining.pop(0)
+            close_tab()
+            if w.status == 'success':
+                completed.append(w.url)
+            else:
+                failed.append(w.url)
+            time.sleep(0.3)
+    
+    # 结果
+    print()
+    print('=' * 60)
+    log('转存结束！', 'INFO')
+    log('总计: {0}'.format(total), 'INFO')
+    log('成功: {0}'.format(len(completed)), 'SUCCESS')
+    log('失败: {0}'.format(len(failed)), 'WARN')
+    log('本次处理: {0}'.format(processed), 'INFO')
+    
+    # 写入日志尾
+    if CURRENT_LOG_FILE:
+        with open(CURRENT_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write('\n' + '=' * 60 + '\n')
+            f.write('转存结束\n')
+            f.write('总计: {0}\n'.format(total))
+            f.write('成功: {0}\n'.format(len(completed)))
+            f.write('失败: {0}\n'.format(len(failed)))
+            f.write('结束时间: {0}\n'.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            f.write('=' * 60 + '\n')
+    
+    # 显示异常记录位置
+    exception_folder = EXCEPTION_DIR / folder_name
+    if exception_folder.exists():
+        print()
+        print('异常记录位置: {0}'.format(exception_folder))
+        for f in exception_folder.glob('*.txt'):
+            content = f.read_text(encoding='utf-8').strip()
+            count = len(content.split('\n')) if content else 0
+            print('  - {0}: {1} 条'.format(f.name, count))
+            log('异常文件 {0}: {1} 条'.format(f.name, count), 'EXCEPTION')
+    
+    if len(completed) + len(failed) >= total:
+        print()
+        print('[OK] 全部完成！清除进度记录...')
+        log('全部完成！清除进度记录', 'SUCCESS')
+        clear_progress('xunlei')
+    else:
+        print()
+        print('[WARN] 任务未完成，进度已保存，下次可继续')
+        log('任务未完成，进度已保存', 'WARN')
+    
+    print('=' * 60)
+    print()
+    input('按 Enter 退出...')
+
+
+if __name__ == '__main__':
+    main()
