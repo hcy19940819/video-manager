@@ -18,7 +18,7 @@ from core.hybrid_recognizer import HybridRecognizer
 
 @click.group()
 def cli():
-    """视频人物花名册管理系统 - 综合模式"""
+    """视频人物花名册管理系统 - 影库管家参考版"""
     pass
 
 
@@ -142,6 +142,118 @@ def identify(directory, output, auto_move, min_confidence):
     )
 
 
+# ========== 搜索命令（影库管家核心功能）==========
+
+@cli.command()
+@click.argument('image_path', type=click.Path(exists=True))
+@click.option('--confidence', '-c', default=0.6, help='最小匹配度(0-1)')
+def search_image(image_path, confidence):
+    """以图搜视频 - 上传照片搜索包含该人物的视频
+    
+    示例:
+        python cli_hybrid.py search-image "/照片/张三.jpg"
+        python cli_hybrid.py search-image ./query.png -c 0.7
+    """
+    from search_engine import ImageSearchEngine
+    
+    engine = ImageSearchEngine()
+    results = engine.search_by_image(image_path, min_confidence=confidence)
+    
+    print("\n" + "="*60)
+    print("🔍 搜索结果")
+    print("="*60)
+    
+    if not results:
+        print("❌ 未找到匹配视频")
+        return
+    
+    for i, r in enumerate(results[:10], 1):
+        print(f"\n{i}. {r['video_name']}")
+        print(f"   匹配度: {r['confidence']:.1%}")
+        print(f"   匹配次数: {r['match_count']}次")
+        print(f"   时间点: {', '.join(f'{t:.1f}s' for t in r['timestamps'])}")
+        print(f"   路径: {r['video_path']}")
+        
+        if r['screenshots']:
+            print(f"   截图保存: {len(r['screenshots'])}张")
+
+
+@cli.command()
+@click.argument('query')
+def search(query):
+    """语义搜索 - 用自然语言描述搜索视频
+    
+    示例:
+        python cli_hybrid.py search "找张三的视频"
+        python cli_hybrid.py search "有张三和李四一起的"
+        python cli_hybrid.py search "时长超过10分钟的"
+    """
+    from search_engine import SemanticSearchEngine
+    
+    engine = SemanticSearchEngine()
+    results = engine.search(query)
+    
+    print("\n" + "="*60)
+    print("🔍 搜索结果")
+    print("="*60)
+    
+    if not results:
+        print("❌ 未找到匹配视频")
+        return
+    
+    for i, r in enumerate(results[:15], 1):
+        video = r['video']
+        print(f"\n{i}. {video['filename']}")
+        
+        if 'matched_persons' in r:
+            print(f"   匹配人物: {', '.join(r['matched_persons'])}")
+            print(f"   匹配度: {r['match_score']:.0%}")
+        
+        print(f"   时长: {video.get('duration', 0):.1f}秒")
+        print(f"   路径: {video['path']}")
+
+
+@cli.command()
+@click.option('--min-duration', '-min', type=int, help='最小时长(秒)')
+@click.option('--max-duration', '-max', type=int, help='最大时长(秒)')
+@click.option('--person', '-p', multiple=True, help='指定人物')
+@click.option('--has-persons', is_flag=True, help='只显示有识别出人物的视频')
+def filter(min_duration, max_duration, person, has_persons):
+    """高级筛选 - 多维度过滤视频
+    
+    示例:
+        python cli_hybrid.py filter --min-duration 300 --max-duration 600
+        python cli_hybrid.py filter -p 张三 -p 李四
+        python cli_hybrid.py filter --has-persons
+    """
+    from search_engine import VideoFilter
+    
+    filter_engine = VideoFilter()
+    
+    criteria = {}
+    if min_duration is not None:
+        criteria['min_duration'] = min_duration
+    if max_duration is not None:
+        criteria['max_duration'] = max_duration
+    if person:
+        criteria['persons'] = list(person)
+    if has_persons:
+        criteria['has_persons'] = True
+    
+    results = filter_engine.filter(**criteria)
+    
+    print(f"\n{'='*60}")
+    print(f"🔍 筛选结果: 共 {len(results)} 个视频")
+    print(f"{'='*60}")
+    
+    for i, video in enumerate(results, 1):
+        print(f"\n{i}. {video['filename']}")
+        print(f"   时长: {video.get('duration', 0):.1f}秒")
+        if video.get('persons'):
+            print(f"   人物: {video['persons']}")
+        print(f"   路径: {video['path']}")
+
+
 # ========== 纠正命令 ==========
 
 @cli.command()
@@ -154,10 +266,10 @@ def correct(video_path, person_name, positive):
     
     示例:
         # 确认视频里确实是张三
-        python cli.py correct /path/video.mp4 张三 --positive
+        python cli_hybrid.py correct /path/video.mp4 张三 --positive
         
         # 标记视频里不是李四
-        python cli.py correct /path/video.mp4 李四 --negative
+        python cli_hybrid.py correct /path/video.mp4 李四 --negative
     """
     lib = HybridPersonLibrary()
     
@@ -197,8 +309,8 @@ def identify_one(video_path):
     # 提示纠正
     print("-"*60)
     print("如果识别结果不正确，可以使用以下命令纠正:")
-    print(f"  python cli.py correct \"{video_path}\" [正确人名] --positive")
-    print(f"  python cli.py correct \"{video_path}\" [错误人名] --negative")
+    print(f'  python cli_hybrid.py correct "{video_path}" [正确人名] --positive')
+    print(f'  python cli_hybrid.py correct "{video_path}" [错误人名] --negative')
 
 
 # ========== 管理命令 ==========
@@ -206,18 +318,28 @@ def identify_one(video_path):
 @cli.command()
 def stats():
     """查看统计信息"""
+    from search_engine import VideoFilter
+    
     db = Database()
     lib = HybridPersonLibrary()
+    filter_engine = VideoFilter()
     
     stats = db.get_stats()
+    filter_stats = filter_engine.get_stats()
     
     print("\n" + "="*60)
     print("📊 花名册统计")
     print("="*60)
     print(f"视频总数: {stats['video_count']}")
     print(f"人物总数: {stats['person_count']}")
-    print(f"未识别视频: {stats['unknown_count']}")
+    print(f"总时长: {filter_stats['total_duration']/3600:.1f}小时")
     print(f"总容量: {stats['total_size'] / (1024**3):.2f} GB")
+    print(f"未识别视频: {stats['unknown_count']}")
+    
+    # 显示时长分布
+    print("\n📊 时长分布:")
+    for name, count in filter_stats['by_duration'].items():
+        print(f"  {name}: {count}个")
     
     # 显示人物库详情
     persons = db.get_all_persons()
@@ -244,8 +366,8 @@ def persons():
     if not persons:
         print("\n⚠ 人物库为空")
         print("请先运行:")
-        print("  python cli.py build --videos /已分类视频")
-        print("  python cli.py add_photos /人物照片")
+        print("  python cli_hybrid.py build --videos /已分类视频")
+        print("  python cli_hybrid.py add_photos /人物照片")
         return
     
     print("\n" + "="*60)
@@ -329,10 +451,11 @@ def init():
     print(f"✓ 人脸截图: {FACES_DIR}")
     print(f"✓ 数据库已初始化")
     print("\n使用方法:")
-    print("  1. 建库: python cli.py build --videos /已分类视频")
-    print("  2. 识别: python cli.py identify /未分类视频 -o /输出 --auto-move")
-    print("  3. 纠正: python cli.py correct /视频 人名 --positive/--negative")
-    print("  4. 面板: python manager.py")
+    print("  1. 建库: python cli_hybrid.py build --videos /已分类视频")
+    print("  2. 识别: python cli_hybrid.py identify /未分类视频 -o /输出")
+    print("  3. 搜索: python cli_hybrid.py search-image /照片.jpg")
+    print("  4. 搜索: python cli_hybrid.py search \"找张三的视频\"")
+    print("  5. 面板: python manager.py")
 
 
 if __name__ == '__main__':
