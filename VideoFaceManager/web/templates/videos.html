@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}视频库 - 视频人物花名册{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <div class="card-title" style="margin:0;">🎥 视频库 (共{{ total }}个)</div>
+        <div style="display:flex; gap:10px;">
+            <input type="text" placeholder="搜索视频..." id="searchInput" 
+                   style="padding:8px 12px; border:1px solid #ddd; border-radius:6px; width:200px;">
+            <button class="btn" onclick="searchVideos()">🔍 搜索</button>
+        </div>
+    </div>
+    
+    {% if videos %}
+    <div class="video-grid" id="videoGrid">
+        {% for video in videos %}
+        <a href="/video/{{ video.id }}" class="video-card">
+            <div class="video-thumb">
+                {% if video.thumbnail %}
+                <img src="/thumb/{{ video.thumbnail | basename }}" alt="缩略图">
+                {% else %}
+                <span style="color:#999; font-size:32px;">🎬</span>
+                {% endif %}
+            </div>
+            <div class="video-info">
+                <div class="video-name">{{ video.filename }}</div>
+                <div style="font-size:12px; color:#999; margin-bottom:8px;">
+                    {{ "%.1f"|format(video.duration) }}秒 | 
+                    {{ "%.2f"|format(video.size / (1024**3)) }}GB
+                </div>
+                <div class="video-persons">
+                    {% if video.persons %}
+                        {% set persons_list = video.persons | fromjson %}
+                        {% if persons_list %}
+                            {% for person in persons_list[:3] %}
+                            <span class="person-tag">{{ person }}</span>
+                            {% endfor %}
+                            {% if persons_list|length > 3 %}
+                            <span class="person-tag">+{{ persons_list|length - 3 }}</span>
+                            {% endif %}
+                        {% else %}
+                            <span class="person-tag unknown">未识别</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="person-tag unknown">未识别</span>
+                    {% endif %}
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="/videos?page={{ page-1 }}">← 上一页</a>
+        {% endif %}
+        
+        <span>第 {{ page }} 页 / 共 {{ total_pages }} 页</span>
+        
+        {% if page < total_pages %}
+        <a href="/videos?page={{ page+1 }}">下一页 →</a>
+        {% endif %}
+    </div>
+    {% endif %}
+    
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">📂</div>
+        <p>还没有视频</p>
+        <p style="font-size:13px; margin-top:10px;">运行: python cli.py scan /视频文件夹</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function searchVideos() {
+    const keyword = document.getElementById('searchInput').value.toLowerCase();
+    const cards = document.querySelectorAll('.video-card');
+    
+    cards.forEach(card => {
+        const name = card.querySelector('.video-name').textContent.toLowerCase();
+        card.style.display = name.includes(keyword) ? 'block' : 'none';
+    });
+}
+
+document.getElementById('searchInput').addEventListener('keyup', function(e) {
+    if (e.key === 'Enter') searchVideos();
+});
+</script>
+{% endblock %}

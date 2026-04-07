@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+
+{% block title %}{{ video.filename }} - 视频详情{% endblock %}
+
+{% block extra_css %}
+<style>
+.video-detail {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    gap: 30px;
+}
+
+.video-preview {
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.video-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.video-meta {
+    margin-top: 20px;
+}
+
+.meta-row {
+    display: flex;
+    padding: 12px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.meta-label {
+    width: 100px;
+    color: #666;
+    font-size: 14px;
+}
+
+.meta-value {
+    flex: 1;
+    font-weight: 500;
+}
+
+.persons-section {
+    margin-top: 30px;
+}
+
+.persons-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 15px;
+}
+
+.person-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 15px;
+    background: #e3f2fd;
+    color: #1976d2;
+    border-radius: 20px;
+    font-size: 14px;
+}
+
+.person-badge .confidence {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.actions {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+.edit-form {
+    display: none;
+    margin-top: 20px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.edit-form.active {
+    display: block;
+}
+
+.person-select {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 15px 0;
+}
+
+.person-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 15px;
+    background: white;
+    border: 2px solid #ddd;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.person-checkbox:hover {
+    border-color: #667eea;
+}
+
+.person-checkbox.selected {
+    background: #e3f2fd;
+    border-color: #1976d2;
+    color: #1976d2;
+}
+
+.person-checkbox input {
+    display: none;
+}
+
+.file-path {
+    font-family: monospace;
+    font-size: 13px;
+    background: #f5f5f5;
+    padding: 8px 12px;
+    border-radius: 6px;
+    word-break: break-all;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <a href="/videos" style="color:#666; text-decoration:none;">← 返回视频库</a>
+    
+    <h2 style="margin:20px 0;">{{ video.filename }}</h2>
+    
+    <div class="video-detail">
+        <!-- 左侧预览 -->
+        <div>
+            <div class="video-preview">
+                {% if video.thumbnail %}
+                <img src="/thumb/{{ video.thumbnail | basename }}" alt="视频预览">
+                {% else %}
+                <span style="color:#666; font-size:48px;">🎬</span>
+                {% endif %}
+            </div>
+            
+            <div class="actions">
+                <a href="file:///{{ video.path }}" class="btn" target="_blank">▶ 播放视频</a>
+                <button class="btn btn-secondary" onclick="showEditForm()">✏️ 编辑人物</button>
+            </div>
+        </div>
+        
+        <!-- 右侧信息 -->
+        <div>
+            <div class="video-meta">
+                <div class="meta-row">
+                    <span class="meta-label">文件路径</span>
+                    <span class="meta-value file-path">{{ video.path }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">文件大小</span>
+                    <span class="meta-value">{{ "%.2f"|format(video.size / (1024**3)) }} GB</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">视频时长</span>
+                    <span class="meta-value">{{ "%.1f"|format(video.duration) }} 秒</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">分辨率</span>
+                    <span class="meta-value">{{ video.width }} x {{ video.height }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">识别到人脸</span>
+                    <span class="meta-value">{{ video.face_count }} 个</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">MD5</span>
+                    <span class="meta-value file-path">{{ video.md5 }}</span>
+                </div>
+            </div>
+            
+            <div class="persons-section">
+                <div class="card-title">👥 识别出的人物</div>
+                
+                <div class="persons-list" id="personsList">
+                    {% if persons %}
+                        {% for name, confidence in persons %}
+                        <a href="/persons#{{ name }}" class="person-badge">
+                            {{ name }}
+                            <span class="confidence">{{ "%.0f"|format(confidence*100) }}%</span>
+                        </a>
+                        {% endfor %}
+                    {% else %}
+                        <span style="color:#999;">未识别出人物</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 编辑表单 -->
+    <div class="edit-form" id="editForm">
+        <h3>✏️ 编辑人物</h3>
+        <p style="margin:10px 0; color:#666;">点击选择/取消人物，然后保存</p>
+        
+        <div class="person-select" id="personSelect">
+            <!-- 动态加载人物列表 -->
+        </div>
+        
+        <div style="margin-top:15px;">
+            <button class="btn" onclick="savePersons({{ video.id }})">💾 保存</button>
+            <button class="btn btn-secondary" onclick="hideEditForm()">取消</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentPersons = [];
+let allPersons = [];
+
+// 页面加载时获取当前人物
+{% if video.persons %}
+currentPersons = {{ video.persons | safe }};
+{% endif %}
+
+function showEditForm() {
+    document.getElementById('editForm').classList.add('active');
+    loadAllPersons();
+}
+
+function hideEditForm() {
+    document.getElementById('editForm').classList.remove('active');
+}
+
+async function loadAllPersons() {
+    const response = await fetch('/api/persons');
+    allPersons = await response.json();
+    
+    const container = document.getElementById('personSelect');
+    container.innerHTML = '';
+    
+    allPersons.forEach(person => {
+        const isSelected = currentPersons.includes(person.name);
+        
+        const div = document.createElement('label');
+        div.className = 'person-checkbox' + (isSelected ? ' selected' : '');
+        div.innerHTML = `
+            <input type="checkbox" value="${person.name}" ${isSelected ? 'checked' : ''}
+                   onchange="togglePerson(this)">
+            ${person.name}
+        `;
+        container.appendChild(div);
+    });
+}
+
+function togglePerson(checkbox) {
+    const label = checkbox.closest('.person-checkbox');
+    if (checkbox.checked) {
+        label.classList.add('selected');
+    } else {
+        label.classList.remove('selected');
+    }
+}
+
+async function savePersons(videoId) {
+    const checkboxes = document.querySelectorAll('#personSelect input:checked');
+    const selectedPersons = Array.from(checkboxes).map(cb => cb.value);
+    
+    const response = await fetch(`/api/video/${videoId}/persons`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({persons: selectedPersons})
+    });
+    
+    if (response.ok) {
+        alert('保存成功！');
+        location.reload();
+    } else {
+        alert('保存失败');
+    }
+}
+</script>
+{% endblock %}

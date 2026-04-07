@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}人物库 - 视频人物花名册{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <div class="card-title" style="margin:0;">👥 人物库 (共{{ persons|length }}人)</div>
+        
+        <div class="btn" onclick="alert('请直接在 data/person_library/ 文件夹下创建人物子文件夹并放入照片')">
+            ➕ 添加人物
+        </div>
+    </div>
+    
+    {% if persons %}
+    <div class="person-grid">
+        {% for person in persons %}
+        <a href="/person/{{ person.id }}" class="person-card" id="{{ person.name }}">
+            <div class="person-avatar">
+                {{ person.name[0] }}
+            </div>
+            <div class="person-name">{{ person.name }}</div>
+            <div class="person-count">{{ person.video_count }}个视频 | {{ person.face_count }}个特征</div>
+        </a>
+        {% endfor %}
+    </div>
+    
+    {% else %}
+    
+    <div class="empty-state">
+        <div class="icon">👤</div>
+        <p>还没有人物</p>
+        <p style="font-size:13px; margin-top:10px;"></p>
+            1. 在 data/person_library/ 下创建文件夹（如"张三/"）<br>
+            2. 放入3-5张人物照片<br>
+            3. 运行: python cli.py persons
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

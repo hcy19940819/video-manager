@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}概览 - 视频人物花名册{% endblock %}
+
+{% block content %}
+<!-- 统计卡片 -->
+<div class="grid">
+    <div class="stat-card">
+        <span class="number">{{ stats.video_count }}</span>
+        <span class="label">视频总数</span>
+    </div>
+    <div class="stat-card">
+        <span class="number">{{ stats.person_count }}</span>
+        <span class="label">人物总数</span>
+    </div>
+    <div class="stat-card">
+        <span class="number">{{ stats.unknown_count }}</span>
+        <span class="label">未识别视频</span>
+    </div>
+    <div class="stat-card">
+        <span class="number">{{ "%.1f"|format(stats.total_size / (1024**3)) }}</span>
+        <span class="label">总容量(GB)</span>
+    </div>
+</div>
+
+<!-- 最近添加的视频 -->
+<div class="card">
+    <div class="card-title">🎥 最近添加的视频</div>
+    
+    {% if recent_videos %}
+    <div class="video-grid">
+        {% for video in recent_videos %}
+        <a href="/video/{{ video.id }}" class="video-card">
+            <div class="video-thumb">
+                {% if video.thumbnail %}
+                <img src="/thumb/{{ video.thumbnail | basename }}" alt="缩略图">
+                {% else %}
+                <span style="color:#999;">🎬</span>
+                {% endif %}
+            </div>
+            <div class="video-info">
+                <div class="video-name">{{ video.filename }}</div>
+                <div class="video-persons">
+                    {% if video.persons %}
+                        {% set persons_list = video.persons | fromjson %}
+                        {% if persons_list %}
+                            {% for person in persons_list[:3] %}
+                            <span class="person-tag">{{ person }}</span>
+                            {% endfor %}
+                            {% if persons_list|length > 3 %}
+                            <span class="person-tag">+{{ persons_list|length - 3 }}</span>
+                            {% endif %}
+                        {% else %}
+                            <span class="person-tag unknown">未识别</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="person-tag unknown">未识别</span>
+                    {% endif %}
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    
+    <div style="text-align:center; margin-top:20px;">
+        <a href="/videos" class="btn">查看全部视频 →</a>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">📂</div>
+        <p>还没有视频</p>
+        <p style="font-size:13px; margin-top:10px;">运行: python cli.py scan /视频文件夹</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 人物库 -->
+<div class="card">
+    <div class="card-title">👥 人物库 ({{ persons|length }}人)</div>
+    
+    {% if persons %}
+    <div class="person-grid">
+        {% for person in persons %}
+        <a href="/person/{{ person.id }}" class="person-card">
+            <div class="person-avatar">
+                {{ person.name[0] }}
+            </div>
+            <div class="person-name">{{ person.name }}</div>
+            <div class="person-count">{{ person.face_count }}个特征</div>
+        </a>
+        {% endfor %}
+    </div>
+    
+    <div style="text-align:center; margin-top:20px;">
+        <a href="/persons" class="btn">查看全部人物 →</a>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">👤</div>
+        <p>还没有人物</p>
+        <p style="font-size:13px; margin-top:10px;">在 data/person_library/ 下创建人物文件夹并放入照片</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
