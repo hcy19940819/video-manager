@@ -3139,68 +3139,6 @@ def 创建API应用():
             .compare-close:hover {
                 background: rgba(255,255,255,0.3);
             }
-            
-            /* 移动端适配 */
-            @media (max-width: 768px) {
-                .container {
-                    padding: 10px;
-                }
-                .header h1 {
-                    font-size: 1.8em;
-                }
-                .nav {
-                    flex-wrap: wrap;
-                    gap: 10px;
-                }
-                .nav-item {
-                    padding: 6px 12px;
-                    font-size: 0.9em;
-                }
-                .stats {
-                    grid-template-columns: repeat(2, 1fr);
-                }
-                .video-grid {
-                    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-                }
-                .chat-input-area {
-                    flex-direction: column;
-                }
-                .person-list {
-                    grid-template-columns: 1fr;
-                }
-                .duplicate-container {
-                    grid-template-columns: 1fr;
-                }
-                .compare-container {
-                    grid-template-columns: 1fr;
-                    gap: 10px;
-                }
-                .compare-video video {
-                    height: calc(50vh - 80px);
-                }
-                .duplicate-files {
-                    grid-template-columns: 1fr;
-                }
-                .duplicate-actions {
-                    flex-wrap: wrap;
-                }
-                .task-item {
-                    flex-wrap: wrap;
-                }
-                .task-progress {
-                    width: 100%;
-                    margin-top: 10px;
-                }
-            }
-            
-            @media (max-width: 480px) {
-                .stats {
-                    grid-template-columns: 1fr;
-                }
-                .video-grid {
-                    grid-template-columns: 1fr;
-                }
-            }
         </style>
     </head>
     <body>
@@ -3268,6 +3206,34 @@ def 创建API应用():
             
             <div id="tab-videos" style="display:none;">
                 <div class="section">
+                    <!-- 扫描功能区 -->
+                    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                        <h3 style="margin-bottom: 15px;">📂 扫描视频</h3>
+                        <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 200px;">
+                                <label style="display: block; margin-bottom: 5px; color: #666; font-size: 0.9em;">视频路径</label>
+                                <input type="text" id="scan-path" placeholder="输入视频文件夹路径" 
+                                    style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+                            </div>
+                            
+                            <div style="width: 150px;">
+                                <label style="display: block; margin-bottom: 5px; color: #666; font-size: 0.9em;">扫描档位</label>
+                                <select id="scan-level" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+                                    <option value="simple">🔹 简单</option>
+                                    <option value="fast" selected>🔸 快速</option>
+                                    <option value="deep">🔴 深度</option>
+                                </select>
+                            </div>
+                            
+                            <button class="btn" onclick="startScanWithLevel()" style="padding: 10px 24px;">开始扫描</button>
+                        </div>
+                        
+                        <div style="margin-top: 15px; padding: 10px; background: white; border-radius: 6px; font-size: 0.85em; color: #666;">
+                            <strong>档位说明：</strong>
+                            <span id="scan-level-desc">🔸 快速：去重+AI识别，推荐日常使用</span>
+                        </div>
+                    </div>
+                    
                     <h2>📁 视频库</h2>
                     <div id="videos-list" class="video-grid">
                         <div class="empty">加载中...</div>
@@ -4018,6 +3984,51 @@ def 创建API应用():
                 if (gb >= 1) return gb.toFixed(1) + 'GB';
                 const mb = bytes / 1024**2;
                 return mb.toFixed(1) + 'MB';
+            }
+            
+            // ============ 扫描档位 ============
+            const scanLevelDesc = {
+                'simple': '🔹 简单：仅去重，不做AI识别（最快）',
+                'fast': '🔸 快速：去重+AI识别，30秒采样（推荐）',
+                'deep': '🔴 深度：密集AI识别，短采样间隔（最准）'
+            };
+            
+            document.addEventListener('DOMContentLoaded', function() {
+                const scanLevel = document.getElementById('scan-level');
+                if (scanLevel) {
+                    scanLevel.addEventListener('change', function() {
+                        document.getElementById('scan-level-desc').textContent = scanLevelDesc[this.value];
+                    });
+                }
+            });
+            
+            async function startScanWithLevel() {
+                const path = document.getElementById('scan-path').value.trim();
+                const level = document.getElementById('scan-level').value;
+                
+                if (!path) {
+                    alert('请输入视频路径');
+                    return;
+                }
+                
+                try {
+                    const res = await fetch('/api/scan', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({path: path, mode: level})
+                    });
+                    
+                    const data = await res.json();
+                    if (data.success) {
+                        alert(`✅ 扫描任务已提交\n任务ID: ${data.task_id}\n档位: ${level}`);
+                        document.getElementById('scan-path').value = '';
+                        showTab('tasks');
+                    } else {
+                        alert('❌ ' + (data.error || '提交失败'));
+                    }
+                } catch(e) {
+                    alert('❌ 请求失败: ' + e.message);
+                }
             }
             
             function quickChat(msg) {
