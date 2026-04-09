@@ -482,6 +482,16 @@ class 数据库:
         cursor.execute('DELETE FROM person_features WHERE name = ?', (name,))
         self.conn.commit()
     
+    def 删除视频记录(self, path: str):
+        """从数据库删除视频及其指纹记录"""
+        cursor = self.conn.cursor()
+        # 删除指纹
+        cursor.execute('DELETE FROM fingerprints WHERE video_path = ?', (path,))
+        # 删除人物出现记录
+        cursor.execute('DELETE FROM person_appearances WHERE video_path = ?', (path,))
+        self.conn.commit()
+
+    
     def 保存人物出现(self, pa: 人物出现):
         cursor = self.conn.cursor()
         cursor.execute('''
@@ -1983,6 +1993,154 @@ def 创建API应用():
         with 数据库() as db:
             return jsonify(db.获取重复组())
     
+    @app.route('/api/duplicates/delete', methods=['POST'])
+    def delete_duplicates():
+        """删除选中的重复视频"""
+        data = request.get_json()
+        files = data.get('files', [])
+        
+        if not files:
+            return jsonify({'success': False, 'error': '未选择文件'}), 400
+        
+        deleted = 0
+        freed = 0
+        errors = []
+        
+        for file_path in files:
+            try:
+                p = Path(file_path)
+                if p.exists():
+                    size = p.stat().st_size
+                    # 移动到回收站而不是直接删除
+                    import shutil
+                    trash_dir = Path(__file__).parent / "data" / "trash"
+                    trash_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # 生成唯一文件名避免冲突
+                    target = trash_dir / f"{int(time.time())}_{p.name}"
+                    shutil.move(str(p), str(target))
+                    
+                    freed += size
+                    deleted += 1
+                    
+                    # 从数据库中删除记录
+                    with 数据库() as db:
+                        db.删除视频记录(file_path)
+            except Exception as e:
+                errors.append(f"{file_path}: {e}")
+        
+        return jsonify({
+            'success': deleted > 0,
+            'deleted': deleted,
+            'freed': freed,
+            'errors': errors if errors else None
+        })
+    
+    @app.route('/api/settings/test-kimi', methods=['POST'])
+    def test_kimi():
+        """测试Kimi API连接"""
+        data = request.get_json()
+        api_key = data.get('key', '')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': '未提供API Key'})
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "moonshot-v1-8k",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "max_tokens": 10
+            }
+            
+            response = requests.post(
+                "https://api.moonshot.cn/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                return jsonify({'success': True})
+            else:
+                return jsonify({'success': False, 'error': f'HTTP {response.status_code}'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+    
+    @app.route('/api/settings/clear-thumbnails', methods=['POST'])
+    def clear_thumbnails():
+        """清理缩略图缓存"""
+        try:
+            thumb_dir = Path(__file__).parent / "data" / "thumbnails"
+            count = 0
+            if thumb_dir.exists():
+                for f in thumb_dir.glob("*.jpg"):
+                    f.unlink()
+                    count += 1
+            return jsonify({'success': True, 'count': count})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+    
+    @app.route('/api/settings/clear-trash', methods=['POST'])
+    def clear_trash():
+        """清空回收站"""
+        try:
+            trash_dir = Path(__file__).parent / "data" / "trash"
+            freed = 0
+            count = 0
+            if trash_dir.exists():
+                for f in trash_dir.iterdir():
+                    if f.is_file():
+                        freed += f.stat().st_size
+                        f.unlink()
+                        count += 1
+                    elif f.is_dir():
+                        import shutil
+                        shutil.rmtree(f)
+                        count += 1
+            return jsonify({'success': True, 'count': count, 'freed': freed})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+    
+    @app.route('/api/settings/export')
+    def export_data():
+        """导出数据备份"""
+        try:
+            import io
+            from flask import send_file
+            
+            # 收集所有数据
+            with 数据库() as db:
+                视频记录 = db.获取视频记录(限制=10000)
+                人物 = db.获取花名册统计()
+            
+            export = {
+                'export_time': datetime.now().isoformat(),
+                'videos': [{
+                    'path': v.路径,
+                    'size': v.大小,
+                    'duration': v.时长,
+                    'created': v.创建时间
+                } for v in 视频记录],
+                'persons': 人物
+            }
+            
+            json_str = json.dumps(export, ensure_ascii=False, indent=2)
+            buffer = io.BytesIO(json_str.encode('utf-8'))
+            
+            return send_file(
+                buffer,
+                mimetype='application/json',
+                as_attachment=True,
+                download_name=f'video-manager-backup-{datetime.now().strftime("%Y%m%d")}.json'
+            )
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    
     @app.route('/api/libraries')
     def libraries():
         """获取视频库"""
@@ -2832,6 +2990,217 @@ def 创建API应用():
                 color: #667eea;
             }
             .loading.show { display: block; }
+            
+            /* 重复视频对比样式 */
+            .duplicate-item {
+                background: #f8f9fa;
+                padding: 15px;
+                border-radius: 12px;
+                margin-bottom: 15px;
+                border: 1px solid #e9ecef;
+            }
+            .duplicate-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 12px;
+            }
+            .duplicate-type {
+                font-weight: 600;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.85em;
+            }
+            .duplicate-type.identical {
+                background: #dc3545;
+                color: white;
+            }
+            .duplicate-type.similar {
+                background: #ffc107;
+                color: #333;
+            }
+            .duplicate-files {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 10px;
+                margin-bottom: 12px;
+            }
+            .duplicate-file {
+                background: white;
+                padding: 10px;
+                border-radius: 8px;
+                font-size: 0.85em;
+                word-break: break-all;
+            }
+            .duplicate-file label {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                cursor: pointer;
+            }
+            .duplicate-actions {
+                display: flex;
+                gap: 10px;
+            }
+            .duplicate-actions button {
+                padding: 8px 16px;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 0.9em;
+                transition: all 0.2s;
+            }
+            .btn-compare {
+                background: #667eea;
+                color: white;
+            }
+            .btn-compare:hover {
+                background: #5568d3;
+            }
+            .btn-delete {
+                background: #dc3545;
+                color: white;
+            }
+            .btn-delete:hover {
+                background: #c82333;
+            }
+            .btn-keep {
+                background: #28a745;
+                color: white;
+            }
+            .btn-keep:hover {
+                background: #218838;
+            }
+            
+            /* 对比预览模态框 */
+            .compare-modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.95);
+                z-index: 2000;
+                padding: 20px;
+                box-sizing: border-box;
+            }
+            .compare-modal.active {
+                display: flex;
+                flex-direction: column;
+            }
+            .compare-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                color: white;
+                margin-bottom: 15px;
+                padding-bottom: 15px;
+                border-bottom: 1px solid rgba(255,255,255,0.2);
+            }
+            .compare-container {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                flex: 1;
+                overflow: hidden;
+            }
+            .compare-video {
+                background: #1a1a1a;
+                border-radius: 12px;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+            }
+            .compare-video video {
+                width: 100%;
+                height: calc(100% - 60px);
+                object-fit: contain;
+            }
+            .compare-info {
+                padding: 15px;
+                color: white;
+                font-size: 0.9em;
+                background: #2a2a2a;
+            }
+            .compare-info p {
+                margin: 5px 0;
+                word-break: break-all;
+            }
+            .compare-close {
+                background: rgba(255,255,255,0.2);
+                border: none;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 1em;
+            }
+            .compare-close:hover {
+                background: rgba(255,255,255,0.3);
+            }
+            
+            /* 移动端适配 */
+            @media (max-width: 768px) {
+                .container {
+                    padding: 10px;
+                }
+                .header h1 {
+                    font-size: 1.8em;
+                }
+                .nav {
+                    flex-wrap: wrap;
+                    gap: 10px;
+                }
+                .nav-item {
+                    padding: 6px 12px;
+                    font-size: 0.9em;
+                }
+                .stats {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+                .video-grid {
+                    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                }
+                .chat-input-area {
+                    flex-direction: column;
+                }
+                .person-list {
+                    grid-template-columns: 1fr;
+                }
+                .duplicate-container {
+                    grid-template-columns: 1fr;
+                }
+                .compare-container {
+                    grid-template-columns: 1fr;
+                    gap: 10px;
+                }
+                .compare-video video {
+                    height: calc(50vh - 80px);
+                }
+                .duplicate-files {
+                    grid-template-columns: 1fr;
+                }
+                .duplicate-actions {
+                    flex-wrap: wrap;
+                }
+                .task-item {
+                    flex-wrap: wrap;
+                }
+                .task-progress {
+                    width: 100%;
+                    margin-top: 10px;
+                }
+            }
+            
+            @media (max-width: 480px) {
+                .stats {
+                    grid-template-columns: 1fr;
+                }
+                .video-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
         </style>
     </head>
     <body>
@@ -2842,6 +3211,7 @@ def 创建API应用():
                 <a href="#" class="nav-item" onclick="showTab('persons')">👤 人物</a>
                 <a href="#" class="nav-item" onclick="showTab('duplicates')">⚠️ 重复</a>
                 <a href="#" class="nav-item" onclick="showTab('tasks')">📋 任务</a>
+                <a href="#" class="nav-item" onclick="showTab('settings')">⚙️ 设置</a>
             </nav>
             
             <div id="tab-home">
@@ -2942,12 +3312,79 @@ def 创建API应用():
                 </div>
             </div>
             
+            <!-- 对比预览模态框 -->
+            <div id="compare-modal" class="compare-modal">
+                <div class="compare-header">
+                    <h3>🔍 视频对比预览</h3>
+                    <button class="compare-close" onclick="closeCompare()">✕ 关闭</button>
+                </div>
+                <div class="compare-container" id="compare-container">
+                    <!-- 动态插入视频 -->
+                </div>
+            </div>
+            
             <div id="tab-tasks" style="display:none;">
                 <div class="section">
                     <h2>📋 任务队列</h2>
                     <div id="current-task" style="margin-bottom:20px;"></div>
                     <div id="tasks-list" class="task-list">
                         <div class="empty">暂无任务</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="tab-settings" style="display:none;">
+                <div class="section">
+                    <h2>⚙️ 设置</h2>
+                    
+                    <div style="max-width: 600px;">
+                        <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                            <h3 style="margin-bottom: 15px;">🤖 Kimi API 设置</h3>
+                            <p style="color: #666; margin-bottom: 15px;">设置 API Key 以启用 AI 增强功能</p>
+                            <input type="password" id="kimi-key-input" placeholder="输入 Kimi API Key" 
+                                style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px;">
+                            <button class="btn" onclick="saveKimiKey()" style="margin-right: 10px;">保存</button>
+                            <button class="btn" onclick="testKimiKey()" style="background: #28a745;">测试连接</button>
+                            <p id="kimi-status" style="margin-top: 10px; font-size: 0.9em;"></p>
+                        </div>
+                        
+                        <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                            <h3 style="margin-bottom: 15px;">🔧 扫描设置</h3>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px;">默认扫描模式</label>
+                                <select id="scan-mode" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ddd;">
+                                    <option value="fast">快速（推荐）</option>
+                                    <option value="deep">深度</option>
+                                    <option value="simple">简单</option>
+                                </select>
+                            </div>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px;">硬盘保护 (批量大小 GB)</label>
+                                <input type="number" id="disk-protect" value="100" min="0" max="1000"
+                                    style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ddd;">
+                            </div>
+                            <button class="btn" onclick="saveScanSettings()">保存设置</button>
+                        </div>
+                        
+                        <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                            <h3 style="margin-bottom: 15px;">🗑️ 数据管理</h3>
+                            <button class="btn" onclick="clearThumbnails()" style="margin-right: 10px; margin-bottom: 10px;">
+                                清理缩略图缓存
+                            </button>
+                            <button class="btn" onclick="clearTrash()" style="background: #dc3545; margin-bottom: 10px;">
+                                清空回收站
+                            </button>
+                            <button class="btn" onclick="exportData()" style="background: #17a2b8;">
+                                导出数据备份
+                            </button>
+                        </div>
+                        
+                        <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+                            <h3 style="margin-bottom: 15px;">ℹ️ 关于</h3>
+                            <p style="color: #666; margin: 5px 0;">视频管家 v4.0</p>
+                            <p style="color: #666; margin: 5px 0;">AI-Native 视频管理系统</p>
+                            <p style="color: #666; margin: 5px 0;">代码行数: ~2300行</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -3311,6 +3748,7 @@ def 创建API应用():
                     // 每2秒刷新一次
                     taskRefreshInterval = setInterval(loadTasks, 2000);
                 }
+                if (tab === 'settings') loadSettings();
             }
             
             function searchPersonVideos(name) {
@@ -3354,15 +3792,216 @@ def 创建API应用():
                         return;
                     }
                     
-                    container.innerHTML = data.map(g => `
-                        <div style="background:#f8f9fa;padding:15px;border-radius:10px;margin-bottom:10px;">
-                            <p><strong>${g.type === 'identical' ? '完全重复' : '相似视频'}</strong> 
-                               相似度: ${(g.similarity * 100).toFixed(0)}%</p>
-                            ${g.files.map(f => `<p style="font-size:0.9em;color:#666;margin:5px 0;">• ${f.split('/').pop()}</p>`).join('')}
+                    container.innerHTML = data.map((g, groupIndex) => `
+                        <div class="duplicate-item">
+                            <div class="duplicate-header">
+                                <span class="duplicate-type ${g.type}">
+                                    ${g.type === 'identical' ? '完全重复' : '相似视频'}
+                                </span>
+                                <span style="color:#666;font-size:0.9em;">
+                                    相似度: ${(g.similarity * 100).toFixed(0)}% | 
+                                    可节省: ${formatSize(g.files.reduce((sum, f) => sum + (g.size || 0), 0) - (g.size || 0))}
+                                </span>
+                            </div>
+                            <div class="duplicate-files">
+                                ${g.files.map((f, fileIndex) => `
+                                    <div class="duplicate-file">
+                                        <label>
+                                            <input type="checkbox" name="dup-${groupIndex}" value="${encodeURIComponent(f)}" 
+                                                ${fileIndex === 0 ? 'checked' : ''}>
+                                            <span>${f.split('/').pop()}</span>
+                                        </label>
+                                        <p style="margin:5px 0 0 25px;color:#888;font-size:0.8em;">${f}</p>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            <div class="duplicate-actions">
+                                <button class="btn-compare" onclick="compareDuplicates(${groupIndex})">
+                                    🔍 对比预览
+                                </button>
+                                <button class="btn-delete" onclick="deleteDuplicates(${groupIndex})">
+                                    🗑️ 删除选中
+                                </button>
+                                <button class="btn-keep" onclick="keepFirst(${groupIndex})">
+                                    ✅ 保留首个
+                                </button>
+                            </div>
                         </div>
                     `).join('');
                 } catch(e) {
+                    console.error(e);
                     document.getElementById('duplicates-list').innerHTML = '<div class="empty">加载失败</div>';
+                }
+            }
+            
+            let duplicateData = [];
+            
+            async function loadDuplicates() {
+                try {
+                    const res = await fetch('/api/duplicates');
+                    duplicateData = await res.json();
+                    const container = document.getElementById('duplicates-list');
+                    
+                    if (duplicateData.length === 0) {
+                        container.innerHTML = '<div class="empty">未发现重复视频</div>';
+                        return;
+                    }
+                    
+                    renderDuplicates();
+                } catch(e) {
+                    console.error(e);
+                    document.getElementById('duplicates-list').innerHTML = '<div class="empty">加载失败</div>';
+                }
+            }
+            
+            function renderDuplicates() {
+                const container = document.getElementById('duplicates-list');
+                container.innerHTML = duplicateData.map((g, groupIndex) => `
+                    <div class="duplicate-item">
+                        <div class="duplicate-header">
+                            <span class="duplicate-type ${g.type}">
+                                ${g.type === 'identical' ? '⚠️ 完全重复' : '🔸 相似视频'}
+                            </span>
+                            <span style="color:#666;font-size:0.9em;">
+                                相似度: ${(g.similarity * 100).toFixed(0)}%
+                            </span>
+                        </div>
+                        <div class="duplicate-files">
+                            ${g.files.map((f, fileIndex) => `
+                                <div class="duplicate-file">
+                                    <label>
+                                        <input type="checkbox" id="dup-${groupIndex}-${fileIndex}" 
+                                            ${fileIndex > 0 ? 'checked' : ''}>
+                                        <span>${f.split('/').pop()}</span>
+                                    </label>
+                                    <p style="margin:5px 0 0 25px;color:#888;font-size:0.75em;">${f}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div class="duplicate-actions">
+                            <button class="btn-compare" onclick="compareDuplicates(${groupIndex})">
+                                🔍 对比预览
+                            </button>
+                            <button class="btn-delete" onclick="deleteSelected(${groupIndex})">
+                                🗑️ 删除选中
+                            </button>
+                            <button class="btn-keep" onclick="keepFirst(${groupIndex})">
+                                ✅ 只留首个
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            function compareDuplicates(groupIndex) {
+                const group = duplicateData[groupIndex];
+                if (!group || group.files.length < 2) return;
+                
+                const modal = document.getElementById('compare-modal');
+                const container = document.getElementById('compare-container');
+                
+                // 取前两个视频对比
+                const file1 = group.files[0];
+                const file2 = group.files[1];
+                
+                container.innerHTML = `
+                    <div class="compare-video">
+                        <video controls autoplay>
+                            <source src="/api/video/${encodeURIComponent(file1)}" type="video/mp4">
+                        </video>
+                        <div class="compare-info">
+                            <p><strong>视频 1</strong></p>
+                            <p>${file1.split('/').pop()}</p>
+                        </div>
+                    </div>
+                    <div class="compare-video">
+                        <video controls autoplay>
+                            <source src="/api/video/${encodeURIComponent(file2)}" type="video/mp4">
+                        </video>
+                        <div class="compare-info">
+                            <p><strong>视频 2</strong></p>
+                            <p>${file2.split('/').pop()}</p>
+                        </div>
+                    </div>
+                `;
+                
+                modal.classList.add('active');
+            }
+            
+            function closeCompare() {
+                const modal = document.getElementById('compare-modal');
+                const videos = modal.querySelectorAll('video');
+                videos.forEach(v => v.pause());
+                modal.classList.remove('active');
+            }
+            
+            async function deleteSelected(groupIndex) {
+                const group = duplicateData[groupIndex];
+                const selected = [];
+                
+                group.files.forEach((f, i) => {
+                    const checkbox = document.getElementById(`dup-${groupIndex}-${i}`);
+                    if (checkbox && checkbox.checked) {
+                        selected.push(f);
+                    }
+                });
+                
+                if (selected.length === 0) {
+                    alert('请先选择要删除的视频');
+                    return;
+                }
+                
+                if (!confirm(`确定删除 ${selected.length} 个视频吗？\n此操作不可恢复！`)) {
+                    return;
+                }
+                
+                try {
+                    const res = await fetch('/api/duplicates/delete', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({files: selected})
+                    });
+                    
+                    const data = await res.json();
+                    if (data.success) {
+                        alert(`✅ 已删除 ${data.deleted} 个视频，释放 ${formatSize(data.freed)} 空间`);
+                        loadDuplicates();
+                        loadStats();
+                    } else {
+                        alert('❌ 删除失败: ' + (data.error || '未知错误'));
+                    }
+                } catch(e) {
+                    alert('❌ 请求失败: ' + e.message);
+                }
+            }
+            
+            async function keepFirst(groupIndex) {
+                const group = duplicateData[groupIndex];
+                if (group.files.length < 2) return;
+                
+                const toDelete = group.files.slice(1);
+                
+                if (!confirm(`将保留:\n${group.files[0].split('/').pop()}\n\n删除其他 ${toDelete.length} 个视频?`)) {
+                    return;
+                }
+                
+                try {
+                    const res = await fetch('/api/duplicates/delete', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({files: toDelete})
+                    });
+                    
+                    const data = await res.json();
+                    if (data.success) {
+                        alert(`✅ 已删除 ${data.deleted} 个视频，释放 ${formatSize(data.freed)} 空间`);
+                        loadDuplicates();
+                        loadStats();
+                    } else {
+                        alert('❌ 删除失败: ' + (data.error || '未知错误'));
+                    }
+                } catch(e) {
+                    alert('❌ 请求失败: ' + e.message);
                 }
             }
             
@@ -3427,16 +4066,101 @@ def 创建API应用():
                 return div.innerHTML;
             }
             
-            // 初始化
-            loadStats();
+            // ============ 设置页面 ============
+            function loadSettings() {
+                // 加载本地存储的设置
+                const kimiKey = localStorage.getItem('kimi_api_key');
+                if (kimiKey) {
+                    document.getElementById('kimi-key-input').value = '已设置';
+                    document.getElementById('kimi-status').textContent = '✓ API Key 已设置';
+                    document.getElementById('kimi-status').style.color = '#28a745';
+                }
                 
-                document.getElementById('loading').classList.remove('show');
+                const scanMode = localStorage.getItem('scan_mode') || 'fast';
+                document.getElementById('scan-mode').value = scanMode;
+                
+                const diskProtect = localStorage.getItem('disk_protect') || '100';
+                document.getElementById('disk-protect').value = diskProtect;
             }
             
-            function escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
+            async function saveKimiKey() {
+                const input = document.getElementById('kimi-key-input');
+                const key = input.value.trim();
+                
+                if (!key || key === '已设置') {
+                    alert('请输入有效的 API Key');
+                    return;
+                }
+                
+                localStorage.setItem('kimi_api_key', key);
+                input.value = '已设置';
+                document.getElementById('kimi-status').textContent = '✓ 已保存';
+                document.getElementById('kimi-status').style.color = '#28a745';
+                alert('API Key 已保存（仅存储在本地浏览器）');
+            }
+            
+            async function testKimiKey() {
+                const status = document.getElementById('kimi-status');
+                status.textContent = '测试连接中...';
+                status.style.color = '#666';
+                
+                try {
+                    const res = await fetch('/api/settings/test-kimi', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({key: localStorage.getItem('kimi_api_key')})
+                    });
+                    
+                    const data = await res.json();
+                    if (data.success) {
+                        status.textContent = '✓ 连接成功';
+                        status.style.color = '#28a745';
+                    } else {
+                        status.textContent = '✗ 连接失败: ' + data.error;
+                        status.style.color = '#dc3545';
+                    }
+                } catch(e) {
+                    status.textContent = '✗ 请求失败';
+                    status.style.color = '#dc3545';
+                }
+            }
+            
+            function saveScanSettings() {
+                const mode = document.getElementById('scan-mode').value;
+                const protect = document.getElementById('disk-protect').value;
+                
+                localStorage.setItem('scan_mode', mode);
+                localStorage.setItem('disk_protect', protect);
+                
+                alert('扫描设置已保存');
+            }
+            
+            async function clearThumbnails() {
+                if (!confirm('确定清理缩略图缓存吗？\n这不会影响视频文件。')) return;
+                
+                try {
+                    const res = await fetch('/api/settings/clear-thumbnails', {method: 'POST'});
+                    const data = await res.json();
+                    alert(`已清理 ${data.count} 个缩略图`);
+                } catch(e) {
+                    alert('清理失败');
+                }
+            }
+            
+            async function clearTrash() {
+                if (!confirm('确定清空回收站吗？\n此操作不可恢复！')) return;
+                
+                try {
+                    const res = await fetch('/api/settings/clear-trash', {method: 'POST'});
+                    const data = await res.json();
+                    alert(`已清空回收站，释放 ${formatSize(data.freed)}`);
+                } catch(e) {
+                    alert('清空失败');
+                }
+            }
+            
+            function exportData() {
+                window.open('/api/settings/export', '_blank');
             }
             
             // 初始化
