@@ -1,118 +1,68 @@
-# 🎬 视频管家 v3.0 - 终极整合版
+# 🎬 视频管家 v4.0 - AI-Native 视频管理系统
 
-整合自 hcy19940819/GitHub 私有仓库的 4 个项目
+像聊天一样管理你的视频库。
 
-## ✨ 整合功能
-
-| 来源项目 | 功能 | 状态 |
-|---------|------|------|
-| VideoDedup | 🔍 多层pHash去重 | ✅ 已整合 |
-| VideoFaceManager | 👤 花名册学习 | ✅ 已整合 |
-| VideoFaceManager | 🔎 以图搜视频 | ✅ 已整合 |
-| video-manager | 🗂️ 库管理 | ✅ 已整合 |
-| video-manager | 🌐 Web界面 | ✅ 已整合 |
-
-## 🚀 安装
+## 🚀 快速开始
 
 ```bash
-pip install opencv-python pillow numpy tqdm flask insightface
-python 视频管家.py init
-```
+# 安装依赖
+pip install flask flask-cors opencv-python
 
-## 📖 使用
-
-### 1. 扫描视频
-```bash
-# 快速模式
-python 视频管家.py scan "/视频路径" --mode fast
-
-# 深度模式（含AI识别）
-python 视频管家.py scan "/视频路径" --mode deep
-
-# 增量扫描
-python 视频管家.py scan "/视频路径" --incremental
-```
-
-### 2. 查找重复视频
-```bash
-# 多层pHash去重
-python 视频管家.py dup
-
-# 快速模式（仅快速pHash）
-python 视频管家.py dup --mode quick
-```
-
-### 3. 花名册学习
-```bash
-# 学习已分类视频
-python 视频管家.py roster learn "/已分类视频"
-
-# 列出花名册
-python 视频管家.py roster list
-
-# 识别未分类视频
-python 视频管家.py roster identify "/未分类视频"
-```
-
-### 4. 以图搜视频
-```bash
-python 视频管家.py search "/查询图片.jpg" --lib "/视频库路径"
-```
-
-### 5. 库管理
-```bash
-python 视频管家.py lib add "/视频路径"
-python 视频管家.py lib list
-```
-
-### 6. Web界面
-```bash
+# 启动 Web 界面
 python 视频管家.py web --port 5000
+
+# 或使用 Kimi API 增强（可选）
+export KIMI_API_KEY="your-api-key"
+python 视频管家.py web
 ```
 
-## 🏗️ 架构
+访问 http://localhost:5000
+
+## ✨ 核心功能
+
+| 功能 | 说明 |
+|------|------|
+| 🤖 AI 对话 | 自然语言控制，支持本地/Kimi 双引擎 |
+| 📁 视频库 | 海报墙浏览，内置播放器 |
+| 👤 花名册 | 人脸识别，以图搜视频 |
+| 🔍 智能去重 | 四层 pHash 检测重复视频 |
+| 📋 任务队列 | 异步处理，实时进度显示 |
+
+## 🗂️ 项目结构
 
 ```
-单文件设计：视频管家.py (1500+行)
-├── 数据库类：统一SQLite管理
-├── 视频处理器：多层指纹+人物识别
-├── 花名册管理器：学习+识别
-├── 图片搜索引擎：以图搜视频
-├── 库管理器：视频库管理
-└── Web界面：Flask可视化
+.
+├── 视频管家.py          # 主程序 (~2100行，单文件架构)
+├── requirements.txt     # 依赖列表
+├── README.md            # 本文件
+├── docs/                # 文档
+│   ├── v4.0_README.md   # 详细功能文档
+│   ├── 使用手册.md      # 使用指南
+│   ├── 产品设计白皮书.md
+│   └── 竞品对比分析.md
+├── archive/             # 历史版本存档
+│   ├── v1/              # videodedup 早期版本
+│   ├── v2/              # VideoFaceManager 版本
+│   └── v3/              # 视频管家 v3.0
+└── data/                # 数据目录
 ```
 
-## 📁 数据目录
+## 📖 更多文档
+
+- [详细功能说明](docs/v4.0_README.md)
+- [使用手册](docs/使用手册.md)
+- [产品设计](docs/产品设计白皮书.md)
+
+## 📝 使用示例
 
 ```
-data/
-├── video_master.db      # 统一数据库
-├── faces/               # 花名册人脸数据
-└── screenshots/         # 截图
+💬 "扫描下载文件夹"
+💬 "找包含小宝的视频"
+💬 "找重复视频"
+💬 "学习小宝的视频"
+💬 "查看统计"
 ```
 
-## 📊 多层去重原理
+## 📄 License
 
-1. **文件大小+时长** → 快速分组
-2. **快速pHash**（64位，中间帧）→ 初步筛选
-3. **详细pHash序列**（关键帧序列）→ 精确匹配
-4. **文件MD5**（前1MB）→ 完全重复检测
-
-## 🎯 花名册工作流程
-
-```
-已分类视频/           ← 学习
-├── 张三/
-├── 李四/
-└── 王五/
-        ↓ roster learn
-        ↓ 提取平均特征
-        
-未分类视频/           ← 识别
-├── video1.mp4  →  张三 (85%)
-└── video2.mp4  →  李四+王五 (72%)
-```
-
-## 📄 许可证
-
-MIT License
+MIT
